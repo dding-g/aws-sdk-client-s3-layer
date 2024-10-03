@@ -1,0 +1,70 @@
+name: Build lambda layer for @aws-sdk/client-s3
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "^20.10.0"
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install @aws-sdk/client-s3
+        run: npm i --save-exact @aws-sdk/client-s3
+
+      - name: Get sdk version
+        id: version
+        uses: notiz-dev/github-action-json-property@release
+        with:
+          path: "package.json"
+          prop_path: "dependencies.@aws-sdk/client-s3"
+
+      - name: Create Layer
+        run: |
+          mkdir -p nodejs/node_modules/@aws-sdk/
+          cp -r node_modules/@aws-sdk/client-s3 nodejs/node_modules/@aws-sdk/
+          # AWS SDK v3는 peer dependencies를 사용하므로 필요한 core 모듈들도 복사
+          for pkg in $(npm ls --parseable --all | grep "@aws-sdk" | grep -v "client-s3"); do
+            PKG_NAME=$(basename $pkg)
+            cp -r $pkg nodejs/node_modules/@aws-sdk/
+          done
+          zip -r release nodejs
+
+      - name: Current version
+        id: version_current
+        run: echo "sdkver=$(cat PREV_VERSION)" >> $GITHUB_ENV
+
+      - name: Update PREV_VERSION
+        if: ${{ env.sdkver != steps.version.outputs.prop && github.event_name != 'pull_request' }}
+        run: echo ${{steps.version.outputs.prop}} > PREV_VERSION
+
+      - name: Create commit
+        uses: stefanzweifel/git-auto-commit-action@v4
+        if: ${{ env.sdkver != steps.version.outputs.prop && github.event_name != 'pull_request' }}
+        with:
+          commit_message: ${{steps.version.outputs.prop}}
+          file_pattern: PREV_VERSION
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        if: ${{ env.sdkver != steps.version.outputs.prop && github.event_name != 'pull_request' }}
+        with:
+          files: "release.zip"
+          body: ${{steps.version.outputs.prop}}
+          tag_name: ${{steps.version.outputs.prop}}
